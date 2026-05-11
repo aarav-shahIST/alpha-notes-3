@@ -143,7 +143,6 @@ const penColor = document.getElementById("penColor");
 const penThickness = document.getElementById("penThickness");
 const thicknessValue = document.getElementById("thicknessValue");
 const lassoMoveBackground = document.getElementById("lassoMoveBackground");
-const zoomValue = document.getElementById("zoomValue");
 
 const buttons = {
   pen: document.getElementById("penBtn"),
@@ -152,9 +151,6 @@ const buttons = {
   space: document.getElementById("spaceBtn"),
   undo: document.getElementById("undoBtn"),
   redo: document.getElementById("redoBtn"),
-  zoomOut: document.getElementById("zoomOutBtn"),
-  zoomIn: document.getElementById("zoomInBtn"),
-  zoomReset: document.getElementById("zoomResetBtn"),
   copySelection: document.getElementById("copySelectionBtn"),
   deleteSelection: document.getElementById("deleteSelectionBtn"),
   save: document.getElementById("saveBtn"),
@@ -166,7 +162,6 @@ let currentTool = "pen";
 let currentColor = "#000000";
 let currentWidth = 3;
 let includeLassoBackground = false;
-let zoomLevel = 1;
 let currentDocument = null;
 let currentDocumentType = null;
 let currentMeta = {};
@@ -189,9 +184,6 @@ let pageCanvases = new Map();
 let pageMetrics = new Map();
 let autosaveTimer = null;
 let isAutosaving = false;
-let isZoomRendering = false;
-const activeTouches = new Map();
-let activePinch = null;
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -205,116 +197,6 @@ function setTool(tool) {
   currentTool = tool;
   document.querySelectorAll(".tool").forEach((btn) => btn.classList.remove("active"));
   buttons[tool].classList.add("active");
-}
-
-function updateZoomControls() {
-  zoomValue.textContent = `${Math.round(zoomLevel * 100)}%`;
-  buttons.zoomOut.disabled = zoomLevel <= 0.5;
-  buttons.zoomIn.disabled = zoomLevel >= 3;
-}
-
-function clampZoom(value) {
-  return Math.max(0.5, Math.min(3, value));
-}
-
-function getScrollCenter() {
-  return {
-    x: (documentArea.scrollLeft + documentArea.clientWidth / 2) / Math.max(1, documentArea.scrollWidth),
-    y: (documentArea.scrollTop + documentArea.clientHeight / 2) / Math.max(1, documentArea.scrollHeight),
-    offsetX: documentArea.clientWidth / 2,
-    offsetY: documentArea.clientHeight / 2,
-  };
-}
-
-function restoreScrollCenter(center) {
-  documentArea.scrollLeft = center.x * documentArea.scrollWidth - (center.offsetX ?? documentArea.clientWidth / 2);
-  documentArea.scrollTop = center.y * documentArea.scrollHeight - (center.offsetY ?? documentArea.clientHeight / 2);
-}
-
-async function renderCurrentDocument() {
-  if (currentDocumentType === "blank") {
-    renderBlankDocument();
-    return;
-  }
-  if (pdfDoc) await renderPdf();
-}
-
-async function setZoom(value, center = getScrollCenter()) {
-  setZoom.pending = { value, center };
-  if (isZoomRendering) return;
-
-  isZoomRendering = true;
-  while (setZoom.pending) {
-    const next = setZoom.pending;
-    setZoom.pending = null;
-    const nextZoom = clampZoom(next.value);
-    if (Math.abs(nextZoom - zoomLevel) < 0.01) continue;
-    zoomLevel = nextZoom;
-    updateZoomControls();
-    await renderCurrentDocument();
-    restoreScrollCenter(next.center);
-  }
-  isZoomRendering = false;
-}
-
-function cancelActivePointerWork() {
-  activeStroke = null;
-  activeLasso = null;
-  activeEraser = null;
-  activeMove = null;
-}
-
-function getTouchDistance(a, b) {
-  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-}
-
-function getTouchAnchor(a, b) {
-  const rect = documentArea.getBoundingClientRect();
-  const offsetX = (a.clientX + b.clientX) / 2 - rect.left;
-  const offsetY = (a.clientY + b.clientY) / 2 - rect.top;
-  return {
-    x: (documentArea.scrollLeft + offsetX) / Math.max(1, documentArea.scrollWidth),
-    y: (documentArea.scrollTop + offsetY) / Math.max(1, documentArea.scrollHeight),
-    offsetX,
-    offsetY,
-  };
-}
-
-function startPinchIfReady(event) {
-  if (event.pointerType !== "touch") return false;
-  activeTouches.set(event.pointerId, event);
-  if (activeTouches.size < 2) return false;
-
-  const [first, second] = [...activeTouches.values()];
-  activePinch = {
-    startDistance: getTouchDistance(first, second),
-    startZoom: zoomLevel,
-  };
-  cancelActivePointerWork();
-  event.preventDefault();
-  event.stopPropagation();
-  return true;
-}
-
-function updatePinch(event) {
-  if (event.pointerType !== "touch" || !activeTouches.has(event.pointerId)) return false;
-  activeTouches.set(event.pointerId, event);
-  if (!activePinch || activeTouches.size < 2) return false;
-
-  const [first, second] = [...activeTouches.values()];
-  const distance = getTouchDistance(first, second);
-  if (!activePinch.startDistance) return true;
-
-  event.preventDefault();
-  event.stopPropagation();
-  setZoom(activePinch.startZoom * (distance / activePinch.startDistance), getTouchAnchor(first, second));
-  return true;
-}
-
-function endPinch(event) {
-  if (event.pointerType !== "touch") return;
-  activeTouches.delete(event.pointerId);
-  if (activeTouches.size < 2) activePinch = null;
 }
 
 function updateSelectionControls() {
@@ -465,7 +347,7 @@ async function renderPdf() {
     const page = await pdfDoc.getPage(pageNumber);
     const naturalViewport = page.getViewport({ scale: 1 });
     const availableWidth = Math.max(320, documentArea.clientWidth - 72);
-    const scale = Math.min(1.35, availableWidth / naturalViewport.width) * zoomLevel;
+    const scale = Math.min(1.35, availableWidth / naturalViewport.width);
     const viewport = page.getViewport({ scale });
     const pageSpaces = getPageSpaces(pageNumber);
     const baseWidth = Math.floor(viewport.width);
@@ -525,7 +407,7 @@ function renderBlankDocument() {
 
   const pageCount = currentMeta.pageCount || 1;
   const availableWidth = Math.max(320, documentArea.clientWidth - 72);
-  const baseWidth = Math.round(Math.min(816, availableWidth) * zoomLevel);
+  const baseWidth = Math.min(816, availableWidth);
   const baseHeight = Math.round(baseWidth * (11 / 8.5));
 
   for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
@@ -756,7 +638,6 @@ function getCanvasPoint(event, canvas) {
 }
 
 function onPointerDown(event) {
-  if (activePinch) return;
   if (!currentDocument) return;
   const canvas = event.currentTarget;
   const page = Number(canvas.parentElement.dataset.page);
@@ -807,7 +688,6 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
-  if (activePinch) return;
   const canvas = event.currentTarget;
   if (activeStroke && currentTool === "pen") {
     activeStroke.points.push(getPoint(event, canvas));
@@ -1704,9 +1584,6 @@ buttons.lasso.addEventListener("click", () => setTool("lasso"));
 buttons.space.addEventListener("click", () => setTool("space"));
 buttons.undo.addEventListener("click", undo);
 buttons.redo.addEventListener("click", redo);
-buttons.zoomOut.addEventListener("click", () => setZoom(zoomLevel - 0.15));
-buttons.zoomIn.addEventListener("click", () => setZoom(zoomLevel + 0.15));
-buttons.zoomReset.addEventListener("click", () => setZoom(1));
 buttons.copySelection.addEventListener("click", copySelection);
 buttons.deleteSelection.addEventListener("click", deleteSelectedStrokes);
 buttons.save.addEventListener("click", saveAnnotations);
@@ -1735,11 +1612,6 @@ sidebarExpand.addEventListener("click", () => {
   document.body.classList.remove("sidebar-collapsed");
 });
 
-documentArea.addEventListener("pointerdown", startPinchIfReady, { capture: true });
-documentArea.addEventListener("pointermove", updatePinch, { capture: true });
-documentArea.addEventListener("pointerup", endPinch, { capture: true });
-documentArea.addEventListener("pointercancel", endPinch, { capture: true });
-
 window.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && !buttons.copySelection.disabled) {
     event.preventDefault();
@@ -1753,9 +1625,8 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("resize", () => {
-  const center = getScrollCenter();
-  renderCurrentDocument().then(() => restoreScrollCenter(center));
+  if (currentDocumentType === "blank") renderBlankDocument();
+  if (pdfDoc) renderPdf();
 });
 
-updateZoomControls();
 loadPdfList();

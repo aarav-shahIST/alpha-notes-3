@@ -219,8 +219,7 @@ body:not(.sidebar-collapsed) .sidebar-expand {
 
 .color-control,
 .thickness-control,
-.lasso-background-control,
-.zoom-control {
+.lasso-background-control {
   height: 36px;
   display: inline-flex;
   align-items: center;
@@ -255,27 +254,6 @@ body:not(.sidebar-collapsed) .sidebar-expand {
   text-align: right;
 }
 
-.zoom-control {
-  gap: 4px;
-  padding: 0 4px;
-}
-
-.toolbar .zoom-control button {
-  min-width: 36px;
-  padding: 0 10px;
-}
-
-.toolbar .zoom-control button:last-child {
-  min-width: 58px;
-}
-
-.zoom-control output {
-  min-width: 52px;
-  color: #596273;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
 .divider {
   width: 1px;
   height: 28px;
@@ -294,7 +272,6 @@ body:not(.sidebar-collapsed) .sidebar-expand {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  touch-action: none;
   padding: 32px;
   background:
     linear-gradient(#edf2f7 0 0) padding-box,
