@@ -185,6 +185,12 @@ let pageMetrics = new Map();
 let autosaveTimer = null;
 let isAutosaving = false;
 
+function syncPenSettings() {
+  currentColor = penColor.value;
+  currentWidth = Number(penThickness.value);
+  thicknessValue.textContent = penThickness.value;
+}
+
 function setStatus(message) {
   statusEl.textContent = message;
   if (message) {
@@ -1591,12 +1597,13 @@ buttons.export.addEventListener("click", exportAnnotations);
 buttons.deleteNotes.addEventListener("click", deleteAnnotations);
 
 penColor.addEventListener("change", () => {
-  currentColor = penColor.value;
+  syncPenSettings();
+  setTool("pen");
 });
 
 penThickness.addEventListener("input", () => {
-  currentWidth = Number(penThickness.value);
-  thicknessValue.textContent = penThickness.value;
+  syncPenSettings();
+  setTool("pen");
 });
 
 lassoMoveBackground.addEventListener("change", () => {
@@ -1629,4 +1636,5 @@ window.addEventListener("resize", () => {
   if (pdfDoc) renderPdf();
 });
 
+syncPenSettings();
 loadPdfList();
