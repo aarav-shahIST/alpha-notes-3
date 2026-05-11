@@ -142,13 +142,14 @@ const sidebarExpand = document.getElementById("sidebarExpand");
 const penColor = document.getElementById("penColor");
 const penThickness = document.getElementById("penThickness");
 const thicknessValue = document.getElementById("thicknessValue");
-const lassoMoveBackground = document.getElementById("lassoMoveBackground");
 
 const buttons = {
   pen: document.getElementById("penBtn"),
   eraser: document.getElementById("eraserBtn"),
   lasso: document.getElementById("lassoBtn"),
+  snip: document.getElementById("snipBtn"),
   space: document.getElementById("spaceBtn"),
+  addLinedPage: document.getElementById("addLinedPageBtn"),
   undo: document.getElementById("undoBtn"),
   redo: document.getElementById("redoBtn"),
   copySelection: document.getElementById("copySelectionBtn"),
@@ -160,8 +161,7 @@ const buttons = {
 
 let currentTool = "pen";
 let currentColor = "#000000";
-let currentWidth = 3;
-let includeLassoBackground = false;
+let currentWidth = 1.5;
 let currentDocument = null;
 let currentDocumentType = null;
 let currentMeta = {};
@@ -187,7 +187,7 @@ let isAutosaving = false;
 
 function syncPenSettings() {
   currentColor = penColor.value;
-  currentWidth = Number(penThickness.value);
+  currentWidth = Number(penThickness.value) / 2;
   thicknessValue.textContent = penThickness.value;
 }
 
@@ -395,6 +395,54 @@ async function renderPdf() {
 
     await renderPageWithSpaces(page, viewport, pdfCanvas, pageSpaces);
     drawSavedPageEdits(pdfCanvas, pageNumber);
+    redrawPage(pageNumber);
+  }
+
+  const extraLinedPages = currentMeta.extraLinedPages || 0;
+  const availableWidth = Math.max(320, documentArea.clientWidth - 72);
+  const baseWidth = Math.min(816, availableWidth);
+  const baseHeight = Math.round(baseWidth * (11 / 8.5));
+
+  for (let offset = 1; offset <= extraLinedPages; offset++) {
+    const pageNumber = pdfDoc.numPages + offset;
+    const pageSpaces = getPageSpaces(pageNumber);
+    const extraHeight = pageSpaces.reduce((sum, space) => sum + (space.height || 180), 0);
+    const pageHeight = baseHeight + extraHeight;
+
+    const wrap = document.createElement("div");
+    wrap.className = "page-wrap lined-page-wrap";
+    wrap.dataset.page = String(pageNumber);
+
+    const paperCanvas = document.createElement("canvas");
+    paperCanvas.className = "pdf-canvas";
+    paperCanvas.width = baseWidth;
+    paperCanvas.height = pageHeight;
+
+    const drawCanvas = document.createElement("canvas");
+    drawCanvas.className = "draw-canvas";
+    drawCanvas.width = paperCanvas.width;
+    drawCanvas.height = paperCanvas.height;
+
+    wrap.style.width = `${paperCanvas.width}px`;
+    wrap.style.height = `${paperCanvas.height}px`;
+    wrap.append(paperCanvas, drawCanvas);
+    fragment.appendChild(wrap);
+
+    drawCanvas.addEventListener("pointerdown", onPointerDown);
+    drawCanvas.addEventListener("pointermove", onPointerMove);
+    drawCanvas.addEventListener("pointerup", onPointerUp);
+    drawCanvas.addEventListener("pointercancel", onPointerUp);
+
+    pageCanvases.set(pageNumber, drawCanvas);
+    pageMetrics.set(pageNumber, {
+      baseHeight,
+      height: pageHeight,
+      width: baseWidth,
+      spaces: pageSpaces,
+    });
+
+    renderLinedPageWithSpaces(paperCanvas, pageSpaces, baseHeight);
+    drawSavedPageEdits(paperCanvas, pageNumber);
     redrawPage(pageNumber);
   }
 
@@ -666,7 +714,7 @@ function onPointerDown(event) {
     return;
   }
 
-  if (currentTool === "lasso") {
+  if (currentTool === "lasso" || currentTool === "snip") {
     const moveTarget = getMoveTarget(page, point);
     if (moveTarget) {
       activeMove = {
@@ -679,7 +727,7 @@ function onPointerDown(event) {
     }
 
     clearSelection();
-    activeLasso = { page, points: [point] };
+    activeLasso = { page, tool: currentTool, points: [point] };
     return;
   }
 
@@ -700,7 +748,7 @@ function onPointerMove(event) {
     redrawPage(activeStroke.page, activeStroke);
   }
 
-  if (activeLasso && currentTool === "lasso") {
+  if (activeLasso && (currentTool === "lasso" || currentTool === "snip")) {
     activeLasso.points.push(getPoint(event, canvas));
     redrawPage(activeLasso.page, null, activeLasso);
   }
@@ -709,7 +757,7 @@ function onPointerMove(event) {
     eraseAtPoint(activeEraser.page, getPoint(event, canvas), canvas, activeEraser);
   }
 
-  if (activeMove && currentTool === "lasso") {
+  if (activeMove && (currentTool === "lasso" || currentTool === "snip")) {
     const point = getPoint(event, canvas);
     const target = activeMove.target;
     target.x = Math.max(0, Math.min(1 - target.width, activeMove.originalX + point.x - activeMove.start.x));
@@ -985,6 +1033,7 @@ function finishLasso(lasso) {
   selectedStrokeIds.clear();
   currentSelection = null;
   selectedSnipId = null;
+  const includeBackground = lasso.tool === "snip";
 
   if (lasso.points.length > 2) {
     strokes
@@ -994,7 +1043,7 @@ function finishLasso(lasso) {
         if (selected) selectedStrokeIds.add(stroke.id);
       });
 
-    if (selectedStrokeIds.size) {
+    if (selectedStrokeIds.size || includeBackground) {
       const bounds = getLassoBounds(lasso.points);
       currentSelection = {
         id: crypto.randomUUID(),
@@ -1005,8 +1054,8 @@ function finishLasso(lasso) {
         originalWidth: bounds.width,
         originalHeight: bounds.height,
         strokeIds: [...selectedStrokeIds],
-        includeBackground: includeLassoBackground,
-        image: includeLassoBackground ? captureSelection(lasso.page, bounds, [...selectedStrokeIds], true) : null,
+        includeBackground,
+        image: includeBackground ? captureSelection(lasso.page, bounds, [...selectedStrokeIds], true) : null,
       };
     }
   }
@@ -1259,6 +1308,19 @@ function addSpace(page, insertY) {
   renderDocumentKeepingScroll(scrollTop);
 }
 
+function addLinedPageBelow() {
+  if (!currentDocument) return;
+  const scrollTop = documentArea.scrollTop;
+  if (currentDocumentType === "blank") {
+    currentMeta.pageCount = (currentMeta.pageCount || 1) + 1;
+  } else {
+    currentMeta.extraLinedPages = (currentMeta.extraLinedPages || 0) + 1;
+  }
+  remember({ type: "addLinedPage", documentType: currentDocumentType });
+  renderDocumentKeepingScroll(scrollTop);
+  setStatus("Lined page added");
+}
+
 function undo() {
   const action = undoStack.pop();
   if (!action) return;
@@ -1331,6 +1393,16 @@ function undo() {
     const oldHeight = pageCanvases.get(action.space.page)?.height || pageMetrics.get(action.space.page)?.height;
     rescalePageItemsForHeight(action.space.page, oldHeight, oldHeight - (action.space.height || 180));
     spaces = spaces.filter((space) => space.id !== action.space.id);
+    renderDocumentKeepingScroll(scrollTop);
+  }
+
+  if (action.type === "addLinedPage") {
+    const scrollTop = documentArea.scrollTop;
+    if (action.documentType === "blank") {
+      currentMeta.pageCount = Math.max(1, (currentMeta.pageCount || 1) - 1);
+    } else {
+      currentMeta.extraLinedPages = Math.max(0, (currentMeta.extraLinedPages || 0) - 1);
+    }
     renderDocumentKeepingScroll(scrollTop);
   }
 
@@ -1413,6 +1485,16 @@ function redo() {
     const oldHeight = pageCanvases.get(action.space.page)?.height || pageMetrics.get(action.space.page)?.height;
     rescalePageItemsForHeight(action.space.page, oldHeight, oldHeight + (action.space.height || 180));
     spaces.push(action.space);
+    renderDocumentKeepingScroll(scrollTop);
+  }
+
+  if (action.type === "addLinedPage") {
+    const scrollTop = documentArea.scrollTop;
+    if (action.documentType === "blank") {
+      currentMeta.pageCount = (currentMeta.pageCount || 1) + 1;
+    } else {
+      currentMeta.extraLinedPages = (currentMeta.extraLinedPages || 0) + 1;
+    }
     renderDocumentKeepingScroll(scrollTop);
   }
 
@@ -1587,7 +1669,9 @@ newBlankBtn.addEventListener("click", async () => {
 buttons.pen.addEventListener("click", () => setTool("pen"));
 buttons.eraser.addEventListener("click", () => setTool("eraser"));
 buttons.lasso.addEventListener("click", () => setTool("lasso"));
+buttons.snip.addEventListener("click", () => setTool("snip"));
 buttons.space.addEventListener("click", () => setTool("space"));
+buttons.addLinedPage.addEventListener("click", addLinedPageBelow);
 buttons.undo.addEventListener("click", undo);
 buttons.redo.addEventListener("click", redo);
 buttons.copySelection.addEventListener("click", copySelection);
@@ -1604,11 +1688,6 @@ penColor.addEventListener("change", () => {
 penThickness.addEventListener("input", () => {
   syncPenSettings();
   setTool("pen");
-});
-
-lassoMoveBackground.addEventListener("change", () => {
-  includeLassoBackground = lassoMoveBackground.checked;
-  setStatus(includeLassoBackground ? "Lasso will move background" : "Lasso will move writing only");
 });
 
 sidebarToggle.addEventListener("click", () => {

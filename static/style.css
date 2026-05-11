@@ -218,8 +218,7 @@ body:not(.sidebar-collapsed) .sidebar-expand {
 }
 
 .color-control,
-.thickness-control,
-.lasso-background-control {
+.thickness-control {
   height: 36px;
   display: inline-flex;
   align-items: center;
@@ -231,10 +230,6 @@ body:not(.sidebar-collapsed) .sidebar-expand {
   color: #1c2430;
   font-size: 14px;
   white-space: nowrap;
-}
-
-.lasso-background-control input {
-  margin: 0;
 }
 
 .color-control select {
