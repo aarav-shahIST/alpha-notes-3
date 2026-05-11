@@ -1,5 +1,135 @@
 const pdfjsLib = window.pdfjsLib;
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/static/pdf.worker.min.js";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "static/pdf.worker.min.js";
+
+const DB_NAME = "alpha-notes";
+const DB_VERSION = 1;
+let currentPdfUrl = null;
+
+function openStorage() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.addEventListener("upgradeneeded", () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("pdfs")) db.createObjectStore("pdfs", { keyPath: "name" });
+      if (!db.objectStoreNames.contains("annotations")) db.createObjectStore("annotations", { keyPath: "name" });
+    });
+    request.addEventListener("success", () => resolve(request.result));
+    request.addEventListener("error", () => reject(request.error));
+  });
+}
+
+async function withStore(storeName, mode, action) {
+  const db = await openStorage();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, mode);
+    const store = transaction.objectStore(storeName);
+    const request = action(store);
+    let result;
+
+    if (request) {
+      request.addEventListener("success", () => {
+        result = request.result;
+      });
+      request.addEventListener("error", () => reject(request.error));
+    }
+
+    transaction.addEventListener("complete", () => {
+      db.close();
+      resolve(result);
+    });
+    transaction.addEventListener("error", () => {
+      db.close();
+      reject(transaction.error);
+    });
+  });
+}
+
+function safeName(value, fallback = "document") {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  return cleaned || fallback;
+}
+
+async function listStoredPdfs() {
+  const pdfs = await withStore("pdfs", "readonly", (store) => store.getAll());
+  return (pdfs || [])
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((pdf) => ({ name: pdf.name, title: pdf.title || pdf.name, type: "pdf" }));
+}
+
+async function listBlankDocuments() {
+  const annotations = await withStore("annotations", "readonly", (store) => store.getAll());
+  return (annotations || [])
+    .filter((doc) => doc.data?.meta?.type === "blank")
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((doc) => ({
+      name: doc.name,
+      title: doc.data.meta.title || doc.name,
+      type: "blank",
+    }));
+}
+
+async function loadStoredAnnotations(name) {
+  const saved = await withStore("annotations", "readonly", (store) => store.get(name));
+  return saved?.data || { strokes: [], spaces: [], snips: [], masks: [] };
+}
+
+async function saveStoredAnnotations(name, data) {
+  await withStore("annotations", "readwrite", (store) => store.put({ name, data }));
+}
+
+async function deleteStoredDocument(name) {
+  await withStore("annotations", "readwrite", (store) => store.delete(name));
+  await withStore("pdfs", "readwrite", (store) => store.delete(name));
+}
+
+async function getPdfUrl(name) {
+  const saved = await withStore("pdfs", "readonly", (store) => store.get(name));
+  if (!saved?.file) throw new Error("PDF not found");
+  if (currentPdfUrl) URL.revokeObjectURL(currentPdfUrl);
+  currentPdfUrl = URL.createObjectURL(saved.file);
+  return currentPdfUrl;
+}
+
+async function storePdf(file) {
+  const filename = safeName(file.name, "document.pdf");
+  if (!filename.toLowerCase().endsWith(".pdf")) throw new Error("Only PDF files are allowed");
+  await withStore("pdfs", "readwrite", (store) => store.put({ name: filename, title: filename, file }));
+  return { name: filename, title: filename, type: "pdf" };
+}
+
+async function createBlankDocument(title) {
+  const cleanTitle = safeName(title || "Lined notes", "Lined notes");
+  const annotations = await withStore("annotations", "readonly", (store) => store.getAll());
+  const existing = new Set((annotations || []).map((doc) => doc.name));
+  const base = safeName(cleanTitle, "lined-notes");
+  let name = base;
+  let index = 2;
+
+  while (existing.has(name)) {
+    name = `${base}-${index}`;
+    index += 1;
+  }
+
+  const data = {
+    meta: {
+      type: "blank",
+      title: cleanTitle,
+      pageCount: 1,
+      lineSpacing: 34,
+    },
+    strokes: [],
+    spaces: [],
+    snips: [],
+    masks: [],
+  };
+
+  await saveStoredAnnotations(name, data);
+  return { name, title: cleanTitle, type: "blank" };
+}
 
 const pdfUpload = document.getElementById("pdfUpload");
 const newBlankBtn = document.getElementById("newBlankBtn");
@@ -95,11 +225,10 @@ function remember(action) {
 }
 
 async function loadPdfList() {
-  const res = await fetch("/documents");
-  const data = await res.json();
+  const documents = [...await listStoredPdfs(), ...await listBlankDocuments()];
   pdfList.innerHTML = "";
 
-  data.documents.forEach((doc) => {
+  documents.forEach((doc) => {
     const btn = document.createElement("button");
     btn.className = "pdf-item";
     btn.type = "button";
@@ -150,15 +279,14 @@ async function openPdf(filename) {
   setStatus("Loading PDF...");
   await loadPdfList();
 
-  const annotationRes = await fetch(`/annotations/${encodeURIComponent(filename)}`);
-  const annotationData = await annotationRes.json();
+  const annotationData = await loadStoredAnnotations(filename);
   currentMeta = annotationData.meta || {};
   strokes = annotationData.strokes || [];
   spaces = annotationData.spaces || [];
   snips = annotationData.snips || [];
   masks = annotationData.masks || [];
 
-  pdfDoc = await pdfjsLib.getDocument(`/pdf/${encodeURIComponent(filename)}`).promise;
+  pdfDoc = await pdfjsLib.getDocument(await getPdfUrl(filename)).promise;
   await renderPdf();
   setStatus("Ready");
 }
@@ -169,8 +297,7 @@ async function openBlankDocument(doc) {
   setStatus("Loading lined notes...");
   await loadPdfList();
 
-  const annotationRes = await fetch(`/annotations/${encodeURIComponent(doc.name)}`);
-  const annotationData = await annotationRes.json();
+  const annotationData = await loadStoredAnnotations(doc.name);
   currentMeta = {
     type: "blank",
     title: doc.title || doc.name,
@@ -1263,13 +1390,8 @@ function redo() {
 
 async function saveAnnotations() {
   if (!currentDocument) return;
-  const res = await fetch(`/annotations/${encodeURIComponent(currentDocument)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ meta: currentMeta, strokes, spaces, snips, masks }),
-  });
-
-  setStatus(res.ok ? "Notes saved" : "Save failed");
+  await saveStoredAnnotations(currentDocument, { meta: currentMeta, strokes, spaces, snips, masks });
+  setStatus("Notes saved");
 }
 
 function escapeHtml(value) {
@@ -1379,11 +1501,7 @@ async function deleteAnnotations() {
   const confirmed = window.confirm(`Delete "${currentMeta.title || currentDocument}" and all saved notes? This cannot be undone.`);
   if (!confirmed) return;
 
-  const res = await fetch(`/annotations/${encodeURIComponent(currentDocument)}`, { method: "DELETE" });
-  if (!res.ok) {
-    setStatus("Delete failed");
-    return;
-  }
+  await deleteStoredDocument(currentDocument);
 
   strokes = [];
   spaces = [];
@@ -1409,37 +1527,25 @@ pdfUpload.addEventListener("change", async () => {
   const file = pdfUpload.files[0];
   if (!file) return;
 
-  const formData = new FormData();
-  formData.append("pdf", file);
-
-  const res = await fetch("/upload", { method: "POST", body: formData });
-  const data = await res.json();
   pdfUpload.value = "";
 
-  if (!res.ok) {
-    setStatus(data.error || "Upload failed");
+  let doc;
+  try {
+    doc = await storePdf(file);
+  } catch (error) {
+    setStatus(error.message || "Upload failed");
     return;
   }
 
   await loadPdfList();
-  await openPdf(data.filename);
+  await openPdf(doc.name);
 });
 
 newBlankBtn.addEventListener("click", async () => {
   const title = window.prompt("Name this lined document", "Lined notes");
   if (title === null) return;
 
-  const res = await fetch("/blank-documents", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
-  });
-  const doc = await res.json();
-
-  if (!res.ok) {
-    setStatus(doc.error || "Could not create notes");
-    return;
-  }
+  const doc = await createBlankDocument(title);
 
   await loadPdfList();
   await openBlankDocument(doc);
