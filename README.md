@@ -25,4 +25,6 @@ You can open `index.html` directly, or serve the folder with any static file ser
 
 PDF rendering uses PDF.js from the CDN. The local `static/pdf.worker.min.js` file points PDF.js at the matching CDN worker.
 
+Use the zoom buttons in the toolbar or a two-finger pinch on the document area to zoom. Edits autosave to browser storage shortly after each change.
+
 The old Flask app remains in `app.py` for local experimentation, but the GitHub Pages version uses only `index.html` and the `static/` folder.
