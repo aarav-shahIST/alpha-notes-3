@@ -1697,13 +1697,12 @@ buttons.export.addEventListener("click", exportAnnotations);
 buttons.deleteNotes.addEventListener("click", deleteAnnotations);
 
 penColor.addEventListener("change", () => {
-  syncPenSettings();
-  setTool("pen");
+  currentColor = penColor.value;
 });
 
 penThickness.addEventListener("input", () => {
-  syncPenSettings();
-  setTool("pen");
+  currentWidth = Number(penThickness.value);
+  thicknessValue.textContent = penThickness.value;
 });
 
 sidebarToggle.addEventListener("click", () => {
@@ -1731,6 +1730,5 @@ window.addEventListener("resize", () => {
   if (pdfDoc) renderPdf();
 });
 
-syncPenSettings();
 loadPdfList();
 updateToolbarButtons();
