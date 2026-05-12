@@ -211,6 +211,21 @@ function updateSelectionControls() {
   buttons.deleteSelection.disabled = !hasSelection;
 }
 
+function updateToolbarButtons() {
+  const hasDocument = Boolean(currentDocument);
+  buttons.pen.disabled = !hasDocument;
+  buttons.eraser.disabled = !hasDocument;
+  buttons.lasso.disabled = !hasDocument;
+  buttons.snip.disabled = !hasDocument;
+  buttons.space.disabled = !hasDocument;
+  buttons.addLinedPage.disabled = !hasDocument;
+  buttons.undo.disabled = !hasDocument;
+  buttons.redo.disabled = !hasDocument;
+  buttons.save.disabled = !hasDocument;
+  buttons.export.disabled = !hasDocument;
+  buttons.deleteNotes.disabled = !hasDocument;
+}
+
 function clearSelection() {
   const selectedPages = new Set(
     strokes.filter((stroke) => selectedStrokeIds.has(stroke.id)).map((stroke) => stroke.page)
@@ -299,6 +314,7 @@ function resetDocumentState(docName, docType) {
   selectedSnipId = null;
   currentSelection = null;
   updateSelectionControls();
+  updateToolbarButtons();
   pageCanvases = new Map();
   pageMetrics = new Map();
   documentArea.innerHTML = "";
@@ -1717,3 +1733,4 @@ window.addEventListener("resize", () => {
 
 syncPenSettings();
 loadPdfList();
+updateToolbarButtons();
